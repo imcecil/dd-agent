@@ -1,5 +1,7 @@
 import copy
+import heapq
 import inspect
+
 from collections import defaultdict
 
 
@@ -102,8 +104,8 @@ class Limiter(object):
         # Metric values extractor
         self._extract_metric_keys = self._extract_to_keys(self._scope, self._selection)
 
-        # Limiter data storage
-        self._selections_by_scope = defaultdict(set)
+        # Limiter data structure
+        self._active_selections_by_scope = defaultdict(ExpiringSelection)
 
         # Trace
         self._blocked_metrics = 0
@@ -166,18 +168,18 @@ class Limiter(object):
         :param *args: metric list parameters
         :param **kw: metric named parameters
         """
-        scope_key, limit_key = self._extract_metric_keys(*args, **kw)
+        scope_value, selection_value = self._extract_metric_keys(*args, **kw)
 
-        if limit_key in self._selections_by_scope[scope_key]:
+        active_scope_selections = self._active_selections_by_scope[scope_value]
+
+        if selection_value in active_scope_selections:
+            active_scope_selections.add(selection_value, 1)
             return True
         else:
-            contexts = self._selections_by_scope[scope_key]
-
-            if len(contexts) >= self._limit_cardinal:
+            if len(active_scope_selections) >= self._limit_cardinal:
                 self._blocked_metrics += 1
                 return False
-
-            contexts.add(limit_key)
+            active_scope_selections.add(selection_value, 1)
             return True
 
     def get_status(self):
@@ -189,12 +191,12 @@ class Limiter(object):
         `max_selection_scope`       -> Scope with the maximum of selections registred
         `max_selection_cardinal`    -> Maximum number of selections registred for a scope
         """
-        scope_cardinal = len(self._selections_by_scope)
+        scope_cardinal = len(self._active_selections_by_scope)
         scope_overflow_cardinal = 0
         max_selection_scope = None
         max_selection_cardinal = 0
 
-        for scope, selections in self._selections_by_scope.iteritems():
+        for scope, selections in self._active_selections_by_scope.iteritems():
             if max_selection_cardinal < len(selections):
                 max_selection_cardinal = len(selections)
                 max_selection_scope = scope
@@ -215,3 +217,37 @@ class Limiter(object):
                 'max_selection_cardinal': max_selection_cardinal
             }
         }
+
+
+class ExpiringSelection(object):
+    """
+    Store active selections
+    """
+    def __init__(self):
+        self._timestamp_by_selection = {}   # Known selection
+        self._selections_heap = []          # Iterate over selection in order of timestamps
+
+    def __len__(self):
+        """
+        Returns unique not-expired selections cardinal
+        """
+        return len(self._timestamp_by_selection)
+
+    def __contains__(self, selection):
+        return selection in self._timestamp_by_selection
+
+    def add(self, selection, timestamp):
+        """
+        Add selection
+        """
+        self._timestamp_by_selection[selection] = timestamp
+        heapq.heappush(self._selections_heap, (timestamp, selection))
+
+    def flush(self, max_timestamp):
+        """
+        Removes expired selections
+        """
+        while self._selections_heap and self._selections_heap[0][0] <= max_timestamp:
+            expiry, key = heapq.heappop(self._selections_heap)
+            if self._timestamp_by_selection.get(key) == expiry:
+                del self._timestamp_by_selection[key]
