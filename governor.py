@@ -13,6 +13,13 @@ class LimiterConfigError(Exception):
 class Governor(object):
     _LIMITERS = []
 
+    # Defines what's an 'active' context
+    # i.e. number of iterations for which a context (not encountered anymore)
+    # is being stored before being flushed.
+    _KEEP_CONTEXTS_ITERATIONS = 3
+
+    _iteration = 0
+
     @classmethod
     def init(cls, config):
         cls._LIMITERS = LimiterParser.parse_limiters(config)
