@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import sys
+import time
 import traceback
 import unittest
 
@@ -118,6 +119,12 @@ class AgentCheckTest(unittest.TestCase):
             raise Exception("You must define CHECK_NAME")
 
         self.check = None
+
+    # Helper function when testing rates
+    def run_check_twice(self, config, agent_config=None, mocks=None):
+        self.run_check(config, agent_config=None, mocks=None)
+        time.sleep(1)
+        self.run_check(config, agent_config=None, mocks=None)
 
     def run_check(self, config, agent_config=None, mocks=None):
         agent_config = agent_config or self.DEFAULT_AGENT_CONFIG
