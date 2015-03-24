@@ -11,7 +11,7 @@ import socket
 import modules
 
 from util import get_os, get_uuid, md5, Timer, get_hostname, EC2, GCE
-from config import get_version, get_system_stats
+from config import get_governor_config, get_version, get_system_stats
 
 import checks.system.unix as u
 import checks.system.win32 as w32
@@ -20,6 +20,7 @@ from checks.agent_metrics import CollectorMetrics
 from checks.ganglia import Ganglia
 from checks.datadog import Dogstreams, DdForwarder
 from checks.check_status import CheckStatus, CollectorStatus, EmitterStatus, STATUS_OK, STATUS_ERROR
+from governor import Governor
 from resources.processes import Processes as ResProcesses
 
 
@@ -112,6 +113,13 @@ class Collector(object):
         self._resources_checks = [
             ResProcesses(log,self.agentConfig)
         ]
+
+        # Set Governor and instantiate one
+        governor_config = get_governor_config()
+        Governor.init(governor_config, self.agentConfig, self.hostname)
+
+        self.governor = Governor()
+        self.governor_status = []
 
     def stop(self):
         """
@@ -269,11 +277,9 @@ class Collector(object):
 
                 # Collect the metrics and events.
                 current_check_metrics = check.get_metrics()
-                import pdb; pdb.set_trace()
                 current_check_events = check.get_events()
 
                 # Collect governor status
-                # import pdb; pdb.set_trace()
                 current_governor_status = check.get_governor_status()
 
                 # Save them for the payload.
@@ -335,6 +341,12 @@ class Collector(object):
         service_checks.append(create_service_check('datadog.agent.up', AgentCheck.OK,
             hostname=self.hostname))
 
+        # Governor: process the metric payload
+        if False:
+            self.governor_status = self.governor.process(metrics, report=False)
+
+        # import pdb; pdb.set_trace()
+
         # Store the metrics and events in the payload.
         payload['metrics'] = metrics
         payload['events'] = events
@@ -381,7 +393,8 @@ class Collector(object):
 
         # Persist the status of the collection run.
         try:
-            CollectorStatus(check_statuses, emitter_statuses, self.metadata_cache).persist()
+            CollectorStatus(check_statuses, emitter_statuses,
+                            self.metadata_cache, self.governor_status).persist()
         except Exception:
             log.exception("Error persisting collector status")
 

@@ -1,7 +1,11 @@
 import copy
 import inspect
+import logging
+import requests
 
 from collections import defaultdict, deque
+
+log = logging.getLogger('governor')
 
 
 class LimiterConfigError(Exception):
@@ -12,46 +16,77 @@ class LimiterConfigError(Exception):
 
 
 class Governor(object):
-    _LIMITERS = []
-
     # Defines what's an 'active' context
     # i.e. number of iterations for which a context (not encountered anymore)
-    # is being stored before being flushed.
+    # is kept stored before being flushed.
     _CONTEXTS_TTL = 3
 
     # Collector payload's metric format
     _METRIC_FORMAT = ['name', 'timestamp', 'value', 'attributes']
 
+    # Governor report endpoint
+    DATADOG_REPORT_GOVERNOR_URL = 'agent_governor/report_too_many_active_contexts'
+
+    # Governor agent-specific static variables
+    _LIMITERS = None
+    _HOSTNAME = None
+    _DD_URL = None
+    _API_KEYS = None
+
     _iteration = 0
 
     @classmethod
-    def init(cls, config):
-        cls._LIMITERS = LimiterParser.parse_limiters(config)
+    def init(cls, governor_config, agent_config={}, hostname=None):
+        """
+        Set Governor agent-specific variables
+        """
+        cls._LIMITERS = LimiterParser.parse_limiters(governor_config)
+        cls._HOSTNAME = hostname
+        cls._DD_URL = agent_config.get('dd_url')
+        cls._API_KEYS = agent_config.get('api_key')
 
-    def __init__(self, func=None, identifier=None):
+    def __init__(self):
         self._limiters = copy.deepcopy(self._LIMITERS)
 
-    def process(self, metrics):
+    def process(self, metrics, report=False):
         """
         Asynchronous metric payload analysis
-
         """
         for m in metrics:
-            named_args = self._name_args(*m)
-            self.check(named_args)
+            named_args = self._name_args(m[0:3], m[3], asynchronous=True)
+            self._check(named_args)
 
         statuses = self.get_status(flush=True)
 
         # Report to Datadog when Governor limit is hit
-        if any(['trace']['blocked_metrics'] for s in statuses):
-            import pdb; pdb.set_trace()
-            pass
+        if report and any(s['trace']['overflow_metrics'] for s in statuses):
+            self._post_datadog_warning()
 
         return statuses
 
+    def _post_datadog_warning(self):
+        """
+        Agent hit the active contexts limit set by the Governor.
+        Send a warning email to Datadog team.
+        """
+        log.warning("Agent hit the active contexts limit set by the Governor."
+                    "Sending a warning to Datadog team")
+
+        url = "{0}/{1}".format(self._DD_URL, self.DATADOG_REPORT_GOVERNOR_URL)
+
+        try:
+            data = ""
+            log.debug("Performing post {0} to url {1}".format(data, url))
+            r = requests.post(url, data=data)
+            r.raise_for_status()
+        except (requests.ConnectionError, requests.exceptions.Timeout):
+            log.exception("Unable to connect to url {0}".format(url))
+        except requests.exceptions.HTTPError as e:
+            log.exception("HTTP error {0}. Something went wrong.".format(e.response.status_code))
+
     def get_status(self, flush=False):
         """
-        Returns limiter statuses and flush limiters
+        Return limiter statuses and flush limiters
         """
         statuses = [l.get_status() for l in self._limiters]
 
@@ -131,7 +166,7 @@ class Limiter(object):
     """
     A generic limiter
     """
-    _ATOMS = frozenset(['name', 'instance', 'check', 'tags'])
+    _ATOMS = frozenset(['name', 'check', 'tags'])
 
     def __init__(self, scope, selection, limit=None):
         # Definition
@@ -145,7 +180,7 @@ class Limiter(object):
         self._active_selections_by_scope = defaultdict(ExpiringSelection)
 
         # Trace
-        self._blocked_metrics = 0
+        self._overflow_metrics = 0
 
     @classmethod
     def _make_scope_and_selection(cls, scope, selection):
@@ -166,11 +201,11 @@ class Limiter(object):
 
         for s in scope:
             if s not in cls._ATOMS:
-                raise LimiterConfigError("Unrecognized {0} within `scope`. `scope` must"
+                raise LimiterConfigError("Unrecognized `{0}` within `scope`. `scope` must"
                                          " be a subset of {1}".format(s, cls._ATOMS))
         for s in selection:
             if s not in cls._ATOMS:
-                raise LimiterConfigError("Unrecognized {0} within `selection`. `selection` must"
+                raise LimiterConfigError("Unrecognized `{0}` within `selection`. `selection` must"
                                          " be a subset of {1}".format(s, cls._ATOMS))
 
         return scope, selection
@@ -178,7 +213,7 @@ class Limiter(object):
     @classmethod
     def _extract_to_keys(cls, scope, selection):
         """
-        Returns a function that extracts scope and selection values from a metric
+        Return a function that extracts scope and selection values from a metric
 
         :param scope: scope where the rule applies
         :type scope: string tuple or singleton
@@ -188,7 +223,7 @@ class Limiter(object):
         """
         def get(d, k):
             """
-            Returns hashable d.get(k)
+            Return hashable d.get(k)
             """
             v = d.get(k)
             if isinstance(v, list):
@@ -197,16 +232,15 @@ class Limiter(object):
 
         return lambda x: (tuple(get(x, k) for k in scope), tuple(get(x, k) for k in selection))
 
-    def check(self, ts, *args, **kw):
+    def check(self, ts, metric):
         """
         Limiter main task.
         Check incoming metrics against the limit set, and returns a boolean
 
         :param ts: metric timestamp (i.e. governor iteration)
-        :param *args: metric list parameters
-        :param **kw: metric named parameters
+        :param metric: metric named parameters
         """
-        scope_value, selection_value = self._extract_metric_keys(*args, **kw)
+        scope_value, selection_value = self._extract_metric_keys(metric)
 
         active_scope_selections = self._active_selections_by_scope[scope_value]
 
@@ -215,7 +249,9 @@ class Limiter(object):
             return True
         else:
             if len(active_scope_selections) >= self._limit_cardinal:
-                self._blocked_metrics += 1
+                self._overflow_metrics += 1
+                log.warning("Metric overflow {0}. {1} hit the {2} limit set."
+                            .format(self._overflow_metrics, metric, self._limit_cardinal))
                 return False
             active_scope_selections.add(selection_value, ts)
             return True
@@ -227,13 +263,13 @@ class Limiter(object):
         """
         for _, active_selections in self._active_selections_by_scope.iteritems():
             active_selections.flush(max_timestamp)
-        self._blocked_metrics = 0
+        self._overflow_metrics = 0
 
     def get_status(self):
         """
-        Returns limiter trace:
+        Return limiter trace:
         `scope_cardinal`            -> Number of scopes registred
-        `blocked_metrics`           -> Number of blocked metrics
+        `overflow_metrics`          -> Number of overflow metrics
         `scope_overflow_cardinal`   -> Number of scope with selection overflows
         `max_selection_scope`       -> Scope with the maximum of selections registred
         `max_selection_cardinal`    -> Maximum number of selections registred for a scope
@@ -258,7 +294,7 @@ class Limiter(object):
             },
             'trace': {
                 'scope_cardinal': scope_cardinal,
-                'blocked_metrics': self._blocked_metrics,
+                'overflow_metrics': self._overflow_metrics,
                 'scope_overflow_cardinal': scope_overflow_cardinal,
                 'max_selection_scope': max_selection_scope,
                 'max_selection_cardinal': max_selection_cardinal
@@ -268,7 +304,7 @@ class Limiter(object):
 
 class ExpiringSelection(object):
     """
-    Store active selections
+    Active selections storage
     """
     def __init__(self):
         self._timestamp_by_selection = {}   # Active selections
@@ -276,7 +312,7 @@ class ExpiringSelection(object):
 
     def __len__(self):
         """
-        Returns unique not-expired selections cardinal
+        Return unique not-expired selections cardinal
         """
         return len(self._timestamp_by_selection)
 
@@ -292,7 +328,7 @@ class ExpiringSelection(object):
 
     def flush(self, max_timestamp):
         """
-        Removes expired selections
+        Remove expired selections
         """
         while self._selection_queue and self._selection_queue[0][0] <= max_timestamp:
             expiry, key = self._selection_queue.popleft()

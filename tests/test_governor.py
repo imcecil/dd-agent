@@ -1,5 +1,6 @@
 import unittest
 from functools import partial
+from mock import patch
 
 from governor import ExpiringSelection, Governor, Limiter, LimiterParser, LimiterConfigError
 from aggregator import MetricsAggregator
@@ -35,22 +36,15 @@ class GovernorTestCase(unittest.TestCase):
 
     NO_LIMIT = {}
 
-    def test_aggregators_contamination(self):
-        """
-        No cross contamination between != metric aggregators
-        """
-        Governor.init(self.LIMIT_METRIC_NB)
+    METRIC_PAYLOAD = [
+        ('metric_name1', 123456, 42, {"tags": ["tag1", "tag2"]}),
+        ('metric_name2', 123456, 42, {"tags": ["tag1", "tag2"]}),
+        ('metric_name1', 123456, 42, {"tags": ["tag3"]}),
+    ]
 
-        self.assertTrue(len(Governor._LIMITERS) == 1)
-
-        m1 = MockMetricAggregator()
-        m2 = MockMetricAggregator()
-
-        self.assertTrue(m1.submit_metric('my_metric'))
-        self.assertFalse(m1.submit_metric('another_metric'))    # Blocked !
-        self.assertTrue(m1.submit_metric('my_metric'))          # Not blocked !
-
-        self.assertTrue(m2.submit_metric('another_metric'))     # Not blocked
+    ##########
+    # Common #
+    ##########
 
     def test_empty_conf(self):
         """
@@ -89,7 +83,7 @@ class GovernorTestCase(unittest.TestCase):
 
     def test_flush(self):
         """
-        Getting governor status should flush limiters (when explicitely asked)
+        Getting governor status should flush limiters when explicitely asked
         """
         Governor.init(self.LIMIT_METRIC_NB)
         Governor._CONTEXTS_TTL = 0  # Reset active contexts at each governor iteration
@@ -105,7 +99,7 @@ class GovernorTestCase(unittest.TestCase):
 
         self.assertTrue(len(statuses) == 1)
         mstatus = statuses[0]
-        self.assertTrue(mstatus['trace']['blocked_metrics'] == 1)
+        self.assertTrue(mstatus['trace']['overflow_metrics'] == 1)
         self.assertTrue(mstatus['trace']['max_selection_cardinal'] == 1)
 
         # Get it again
@@ -113,8 +107,45 @@ class GovernorTestCase(unittest.TestCase):
 
         self.assertTrue(len(statuses) == 1)
         mstatus = statuses[0]
-        self.assertTrue(mstatus['trace']['blocked_metrics'] == 0)
+        self.assertTrue(mstatus['trace']['overflow_metrics'] == 0)
         self.assertTrue(mstatus['trace']['max_selection_cardinal'] == 0)
+
+    ########################################
+    # Governor for `asynchronous` analysis #
+    ########################################
+
+    @patch('governor.Governor._post_datadog_warning')
+    def test_process(self, mock_post_warning):
+        """
+        Hitting the governor limit should trigger a post warning
+        """
+        Governor.init(self.LIMIT_METRIC_NB)
+        governor = Governor()
+
+        governor.process(self.METRIC_PAYLOAD, report=True)
+
+        mock_post_warning.assert_called_once_with()
+
+    #####################################################
+    # Governor as a decorator  for `real-time` analysis #
+    #####################################################
+
+    def test_aggregators_contamination(self):
+        """
+        No cross contamination between != metric aggregators
+        """
+        Governor.init(self.LIMIT_METRIC_NB)
+
+        self.assertTrue(len(Governor._LIMITERS) == 1)
+
+        m1 = MockMetricAggregator()
+        m2 = MockMetricAggregator()
+
+        self.assertTrue(m1.submit_metric('my_metric'))
+        self.assertFalse(m1.submit_metric('another_metric'))    # Blocked !
+        self.assertTrue(m1.submit_metric('my_metric'))          # Not blocked !
+
+        self.assertTrue(m2.submit_metric('another_metric'))     # Not blocke
 
 
 class LimiterTestCase(unittest.TestCase):
@@ -141,7 +172,7 @@ class LimiterTestCase(unittest.TestCase):
         self.assertTrue(limiter.check(self.generate_metric("scope1", "selection1")))
 
         # Check trace
-        self.assertTrue(limiter._blocked_metrics == 1)
+        self.assertTrue(limiter._overflow_metrics == 1)
 
     def test_no_limit(self):
         """
@@ -181,7 +212,7 @@ class LimiterTestCase(unittest.TestCase):
         # Check trace
         trace = limiter.get_status()['trace']
         self.assertTrue(trace['scope_cardinal'] == 2)
-        self.assertTrue(trace['blocked_metrics'] == 1)
+        self.assertTrue(trace['overflow_metrics'] == 1)
         self.assertTrue(trace['scope_overflow_cardinal'] == 1)
         self.assertTrue(trace['max_selection_scope'] == ("scope1",))
         self.assertTrue(trace['max_selection_cardinal'] == 3)
@@ -260,7 +291,7 @@ class LimiterParserTestCase(unittest.TestCase):
                 'limit': 3
             },
             {
-                'scope': ('name', 'instance'),
+                'scope': ('name', 'check'),
                 'selection': 'tags',
                 'limit': 5
             },
@@ -270,7 +301,7 @@ class LimiterParserTestCase(unittest.TestCase):
                 'limit': 10
             },
             {
-                'scope': 'instance',
+                'scope': 'check',
                 'selection': 'name',
                 'limit': 10
             }
@@ -289,7 +320,7 @@ class LimiterParserTestCase(unittest.TestCase):
     NO_LIMIT_CONFIG = {
         'limiters': [
             {
-                'scope': 'instance',
+                'scope': 'check',
                 'selection': 'tags',
             }
         ]

@@ -323,11 +323,13 @@ class CollectorStatus(AgentStatus):
 
     NAME = 'Collector'
 
-    def __init__(self, check_statuses=None, emitter_statuses=None, metadata=None):
+    def __init__(self, check_statuses=None, emitter_statuses=None,
+                 metadata=None, governor_status=None):
         AgentStatus.__init__(self)
         self.check_statuses = check_statuses or []
         self.emitter_statuses = emitter_statuses or []
         self.metadata = metadata or []
+        self.governor_status = governor_status or []
 
     @property
     def status(self):
@@ -347,7 +349,6 @@ class CollectorStatus(AgentStatus):
             'ipv4',
             'instance-id'
         ]
-
 
         lines = [
             'Clocks',
@@ -472,7 +473,7 @@ class CollectorStatus(AgentStatus):
                 lines += check_lines
 
         # Governor Status
-        governor_enabled = _is_affirmative(get_config().get('use_governor', True))
+        governor_enabled = _is_affirmative(get_config().get('use_governor', False))
 
         if governor_enabled:
             lines += [

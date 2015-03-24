@@ -866,8 +866,8 @@ def load_check_directory(agentConfig, hostname):
         instances = check_config['instances']
         try:
             try:
-                c = check_class(check_name, init_config=init_config,
-                                agentConfig=agentConfig, instances=instances)
+                c = check_class(check_name, init_config=init_config, agentConfig=agentConfig,
+                                instances=instances)
             except TypeError, e:
                 # Backwards compatibility for checks which don't support the
                 # instances argument in the constructor.

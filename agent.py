@@ -98,10 +98,6 @@ class Agent(Daemon):
         systemStats = get_system_stats()
         emitters = self._get_emitters(agentConfig)
 
-        # Configure the governor
-        governor_config = get_governor_config()
-        Governor.init(governor_config)
-
         # Load the checks.d checks
         checksd = load_check_directory(agentConfig, hostname)
 
@@ -208,7 +204,6 @@ def main():
     agentConfig = get_config(options=options)
     autorestart = agentConfig.get('autorestart', False)
     hostname = get_hostname(agentConfig)
-    governor_config = get_governor_config()
 
     COMMANDS = [
         'start',
@@ -287,23 +282,29 @@ def main():
             print getattr(checks.collector, check_name)(log).check(agentConfig)
         except Exception:
             # If not an old-style check, try checks.d
-            Governor.init(governor_config)
             checks = load_check_directory(agentConfig, hostname)
+            # Instantiate a governor
+            governor_config = get_governor_config()
+            Governor.init(governor_config)
+            governor = Governor()
+
             for check in checks['initialized_checks']:
                 if check.name == check_name:
                     check.run()
-                    print check.get_metrics()
+                    metrics = check.get_metrics()
+                    print metrics
                     print check.get_events()
                     print check.get_service_checks()
-                    print check.get_governor_status()
+                    print governor.process(metrics)
                     if len(args) == 3 and args[2] == 'check_rate':
                         print "Running 2nd iteration to capture rate metrics"
                         time.sleep(1)
                         check.run()
-                        print check.get_metrics()
+                        metrics = check.get_metrics()
+                        print metrics
                         print check.get_events()
                         print check.get_service_checks()
-                        print check.get_governor_status()
+                        print governor.process(metrics)
                     check.stop()
 
     elif 'configcheck' == command or 'configtest' == command:

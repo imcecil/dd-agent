@@ -6,11 +6,9 @@ The Check class is being deprecated so don't write new checks with it.
 
 import logging
 import re
-import socket
 import time
 import types
 import os
-import sys
 import traceback
 import copy
 from pprint import pprint
@@ -291,7 +289,12 @@ class AgentCheck(object):
         self.hostname = agentConfig.get('checksd_hostname') or get_hostname(agentConfig)
         self.log = logging.getLogger('%s.%s' % (__name__, name))
 
-        self.governor = Governor()
+        self.governor = None
+
+        # Governor 'real-time' analysis
+        if False:
+            self.governor = Governor()
+
         self.aggregator = MetricsAggregator(
             self.hostname,
             formatter=agent_formatter,
@@ -539,7 +542,8 @@ class AgentCheck(object):
         """
         Return governor status
         """
-        return self.governor.get_status()
+        status = self.governor.get_status() if self.governor else []
+        return status
 
     def run(self):
         """ Run all instances. """
