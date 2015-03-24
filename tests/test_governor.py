@@ -1,15 +1,30 @@
+import copy
 import unittest
 from functools import partial
 from mock import patch
 
-from governor import ExpiringSelection, Governor, Limiter, LimiterParser, LimiterConfigError
+from governor import (
+    CheckGovernor,
+    ExpiringSelection,
+    Governor,
+    Limiter,
+    LimiterParser,
+    LimiterConfigError)
 from aggregator import MetricsAggregator
+
+
+class HybridGovernor(Governor):
+    """
+    HybridGovernor
+    """
+    def __init__(self, arg):
+        self._limiters = copy.deepcopy(self._CHECK_LIMITERS + self._AGENT_LIMITERS)
 
 
 class MockMetricAggregator(MetricsAggregator):
     """a MockClass for tests"""
     def __init__(self):
-        self.governor = Governor()
+        self.governor = CheckGovernor()
         super(MockMetricAggregator, self).__init__("", governor=self.governor)
 
     def get_governor(self):
@@ -21,7 +36,9 @@ class MockMetricAggregator(MetricsAggregator):
 
 
 class MockLimiter(Limiter):
-    """docstring for MockLimiter"""
+    """
+    MockLimiter
+    """
     _ATOMS = frozenset(['key1', 'key2', 'key3', 'key4', 'key5'])
 
 
@@ -63,7 +80,7 @@ class GovernorTestCase(unittest.TestCase):
         """
         def myfunction(self, arg1, arg2, arg3):
             pass
-        m_governor = Governor()
+        m_governor = CheckGovernor()
         m_governor.set(myfunction)
 
         # Synchronous
@@ -136,7 +153,7 @@ class GovernorTestCase(unittest.TestCase):
         """
         Governor.init(self.LIMIT_METRIC_NB)
 
-        self.assertTrue(len(Governor._LIMITERS) == 1)
+        self.assertTrue(len(Governor._limiters()) == 1)
 
         m1 = MockMetricAggregator()
         m2 = MockMetricAggregator()
@@ -349,12 +366,13 @@ class LimiterParserTestCase(unittest.TestCase):
                           self.UNKOWN_SCOPE_CONFIG)
 
         # Correct config
-        rules = LimiterParser.parse_limiters(self.LIMIT_CONFIG)
-        self.assertTrue(len(rules) == 4)
+        check_limiters, agent_limiters = LimiterParser.parse_limiters(self.LIMIT_CONFIG)
+        self.assertTrue(len(check_limiters) == 3)
+        self.assertTrue(len(agent_limiters) == 1)
 
         # No config is a correct config
-        self.assertTrue(LimiterParser.parse_limiters(self.NO_CONFIG) == [])
+        self.assertTrue(LimiterParser.parse_limiters(self.NO_CONFIG) == ([], []))
 
         # No limit is a correct config
-        rules = LimiterParser.parse_limiters(self.NO_LIMIT_CONFIG)
-        self.assertTrue(len(rules) == 1)
+        check_limiters, _ = LimiterParser.parse_limiters(self.NO_LIMIT_CONFIG)
+        self.assertTrue(len(check_limiters) == 1)

@@ -473,7 +473,7 @@ class CollectorStatus(AgentStatus):
                 lines += check_lines
 
         # Governor Status
-        governor_enabled = _is_affirmative(get_config().get('use_governor', False))
+        governor_enabled = _is_affirmative(get_config().get('use_governor', True))
 
         if governor_enabled:
             lines += [
@@ -496,16 +496,16 @@ class CollectorStatus(AgentStatus):
                         limiter_trace = limiter['trace']
 
                         # Limiter definition & status
-                        status = style("OK", 'green') if not limiter_trace['blocked_metrics'] \
+                        status = style("OK", 'green') if not limiter_trace['overflow_metrics'] \
                             else style("OVERFLOW", 'red')
                         limiter_lines.append(
                             "  " * 2 + "- [" + status + "] Limit " +
                             str(limiter_def['selection']) + " by " + str(limiter_def["scope"]))
 
                         # Limiter trace
-                        if limiter_trace['blocked_metrics']:
+                        if limiter_trace['overflow_metrics']:
                             limiter_lines.append(
-                                "  " * 4 + str(limiter_trace['blocked_metrics']) +
+                                "  " * 4 + str(limiter_trace['overflow_metrics']) +
                                 " metrics blocked.")
 
                         limiter_lines.append("")

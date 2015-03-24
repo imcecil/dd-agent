@@ -16,6 +16,10 @@ class LimiterConfigError(Exception):
 
 
 class Governor(object):
+    """
+    Abstract Governor class
+    """
+
     # Defines what's an 'active' context
     # i.e. number of iterations for which a context (not encountered anymore)
     # is kept stored before being flushed.
@@ -28,7 +32,7 @@ class Governor(object):
     DATADOG_REPORT_GOVERNOR_URL = 'agent_governor/report_too_many_active_contexts'
 
     # Governor agent-specific static variables
-    _LIMITERS = None
+    _CHECK_LIMITERS, _AGENT_LIMITERS = None, None
     _HOSTNAME = None
     _DD_URL = None
     _API_KEYS = None
@@ -40,15 +44,12 @@ class Governor(object):
         """
         Set Governor agent-specific variables
         """
-        cls._LIMITERS = LimiterParser.parse_limiters(governor_config)
+        cls._CHECK_LIMITERS, cls._AGENT_LIMITERS = LimiterParser.parse_limiters(governor_config)
         cls._HOSTNAME = hostname
         cls._DD_URL = agent_config.get('dd_url')
         cls._API_KEYS = agent_config.get('api_key')
 
-    def __init__(self):
-        self._limiters = copy.deepcopy(self._LIMITERS)
-
-    def process(self, metrics, report=False):
+    def process(self, metrics, flush=False, report=False):
         """
         Asynchronous metric payload analysis
         """
@@ -56,7 +57,7 @@ class Governor(object):
             named_args = self._name_args(m[0:3], m[3], asynchronous=True)
             self._check(named_args)
 
-        statuses = self.get_status(flush=True)
+        statuses = self.get_status(flush=flush)
 
         # Report to Datadog when Governor limit is hit
         if report and any(s['trace']['overflow_metrics'] for s in statuses):
@@ -88,7 +89,11 @@ class Governor(object):
         """
         Return limiter statuses and flush limiters
         """
-        statuses = [l.get_status() for l in self._limiters]
+        try:
+            statuses = [l.get_status() for l in self._limiters]
+        except TypeError:
+            log.exception("Governor instantiated before being set.")
+            return []
 
         # Flush limiters
         if flush:
@@ -115,12 +120,25 @@ class Governor(object):
         """
         Check metric against all limiters
         """
-        return all(r.check(self._iteration, args) for r in self._limiters)
+        try:
+            return all(r.check(self._iteration, args) for r in self._limiters)
+        except TypeError:
+            log.exception("Governor instantiated before being set.")
+            return True
+
+
+class CheckGovernor(Governor):
+    """
+    Monitor check's metric payload
+    """
+    def __init__(self):
+        self._limiters = copy.deepcopy(self._CHECK_LIMITERS)
 
     #####################################################
     # Governor as a decorator  for `real-time` analysis #
     #####################################################
-
+    # Deprecated: will be removed once confirmed #
+    ##############################################
     def set(self, func):
         """
         Set governor to run as a decorator
@@ -144,6 +162,14 @@ class Governor(object):
             return self._submit_metric(*args, **kw)
 
 
+class AgentGovernor(Governor):
+    """
+    Monitor entire collector's metric payload
+    """
+    def __init__(self):
+        self._limiters = copy.deepcopy(self._AGENT_LIMITERS)
+
+
 class LimiterParser(object):
     """
     Limiter parser
@@ -155,11 +181,22 @@ class LimiterParser(object):
         :param config: agent configuration
         :type config: dictionnary
         """
-        # Process 'limit_contexts_by'
         limiters = [Limiter(r.get('scope'), r.get('selection'), r.get('limit'))
                     for r in config.get('limiters', [])]
 
-        return limiters
+        # Split limiters in two categories:
+        # * Check limiters monitor check's metrics payload individually
+        # * Agent limiters monitor the entire collector payload
+        check_limiters = []
+        agent_limiters = []
+
+        for l in limiters:
+            if 'check' in l._scope:
+                check_limiters.append(l)
+            else:
+                agent_limiters.append(l)
+
+        return check_limiters, agent_limiters
 
 
 class Limiter(object):

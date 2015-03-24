@@ -111,7 +111,7 @@ class Collector(object):
 
         # Resource Checks
         self._resources_checks = [
-            ResProcesses(log,self.agentConfig)
+            ResProcesses(log, self.agentConfig)
         ]
 
         # Set Governor and instantiate one

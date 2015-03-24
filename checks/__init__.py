@@ -292,7 +292,7 @@ class AgentCheck(object):
         self.governor = None
 
         # Governor 'real-time' analysis
-        if False:
+        if True:
             self.governor = Governor()
 
         self.aggregator = MetricsAggregator(
@@ -301,7 +301,6 @@ class AgentCheck(object):
             recent_point_threshold=agentConfig.get('recent_point_threshold', None),
             histogram_aggregates=agentConfig.get('histogram_aggregates'),
             histogram_percentiles=agentConfig.get('histogram_percentiles'),
-            governor=self.governor
         )
 
         self.events = []
@@ -480,7 +479,10 @@ class AgentCheck(object):
         @return the list of samples
         @rtype [(metric_name, timestamp, value, {"tags": ["tag1", "tag2"]}), ...]
         """
-        return self.aggregator.flush()
+        metrics = self.aggregator.flush()
+        if self.governor:
+            self.governor.process(metrics)
+        return metrics
 
     def get_events(self):
         """
@@ -542,7 +544,7 @@ class AgentCheck(object):
         """
         Return governor status
         """
-        status = self.governor.get_status() if self.governor else []
+        status = self.governor.get_status(flush=True) if self.governor else []
         return status
 
     def run(self):
