@@ -1,6 +1,7 @@
 import unittest
+from functools import partial
 
-from governor import Governor, Limiter, LimiterParser, LimiterConfigError
+from governor import ExpiringSelection, Governor, Limiter, LimiterParser, LimiterConfigError
 from aggregator import MetricsAggregator
 
 
@@ -70,16 +71,28 @@ class GovernorTestCase(unittest.TestCase):
             pass
         m_governor = Governor()
         m_governor.set(myfunction)
+
+        # Synchronous
         self.assertTrue(
             m_governor._name_args([1, 2, 3], {}) == {'arg1': 1, 'arg2': 2, 'arg3': 3})
         self.assertTrue(
             m_governor._name_args([1], {'arg2': 2, 'arg3': 3}) == {'arg1': 1, 'arg2': 2, 'arg3': 3})
 
+        # Asynchronous
+        self.assertTrue(
+            m_governor._name_args(
+                [1, 2, 3], {}, asynchronous=True) == {'name': 1, 'timestamp': 2, 'value': 3})
+        self.assertTrue(
+            m_governor._name_args(
+                [1],
+                {'arg2': 2, 'arg3': 3}, asynchronous=True) == {'name': 1, 'arg2': 2, 'arg3': 3})
+
     def test_flush(self):
         """
-        Getting governor status should flush limiters
+        Getting governor status should flush limiters (when explicitely asked)
         """
         Governor.init(self.LIMIT_METRIC_NB)
+        Governor._CONTEXTS_TTL = 0  # Reset active contexts at each governor iteration
 
         aggr = MockMetricAggregator()
         governor = aggr.get_governor()
@@ -88,11 +101,12 @@ class GovernorTestCase(unittest.TestCase):
         self.assertFalse(aggr.submit_metric('another_metric'))    # Blocked !
 
         # Get governor status
-        statuses = governor.get_status()
+        statuses = governor.get_status(flush=True)
 
         self.assertTrue(len(statuses) == 1)
         mstatus = statuses[0]
         self.assertTrue(mstatus['trace']['blocked_metrics'] == 1)
+        self.assertTrue(mstatus['trace']['max_selection_cardinal'] == 1)
 
         # Get it again
         statuses = governor.get_status()
@@ -100,6 +114,7 @@ class GovernorTestCase(unittest.TestCase):
         self.assertTrue(len(statuses) == 1)
         mstatus = statuses[0]
         self.assertTrue(mstatus['trace']['blocked_metrics'] == 0)
+        self.assertTrue(mstatus['trace']['max_selection_cardinal'] == 0)
 
 
 class LimiterTestCase(unittest.TestCase):
@@ -118,6 +133,7 @@ class LimiterTestCase(unittest.TestCase):
         Check incoming metrics against the limit set
         """
         limiter = MockLimiter('key1', 'key2', 1)
+        limiter.check = partial(limiter.check, 0)
 
         # Check limiter task
         self.assertTrue(limiter.check(self.generate_metric("scope1", "selection1")))
@@ -132,6 +148,7 @@ class LimiterTestCase(unittest.TestCase):
         Always accept metrics when no limit is set
         """
         limiter = MockLimiter('key1', 'key2')
+        limiter.check = partial(limiter.check, 0)
 
         for x in xrange(10000):
             self.assertTrue(limiter.check(
@@ -143,6 +160,7 @@ class LimiterTestCase(unittest.TestCase):
         """
 
         limiter = MockLimiter('key1', 'key2', 3)
+        limiter.check = partial(limiter.check, 0)
 
         # Check trace definition
         definition = limiter.get_status()['definition']
@@ -204,6 +222,33 @@ class LimiterTestCase(unittest.TestCase):
         limiter = MockLimiter('key1', 'key2', 1)
         _, limit_value = limiter._extract_metric_keys(metric)
         self.assertTrue(limit_value == (("v1", "v2"),), limit_value)
+
+
+class ExpiringSelectionTestCase(unittest.TestCase):
+    def test_active_selection(self):
+        """
+        Count number of active selections
+        """
+        expiring_selection = ExpiringSelection()
+
+        expiring_selection.add('selection1', 1)  # New selection
+        expiring_selection.add('selection2', 1)  # New selection
+        expiring_selection.add('selection1', 2)  # Active selection
+
+        self.assertTrue(len(expiring_selection), 2)
+
+    def test_flush(self):
+        """
+        Expired selections are flushed
+        """
+        expiring_selection = ExpiringSelection()
+        expiring_selection.add('selection1', 1)
+        expiring_selection.add('selection2', 1)
+        expiring_selection.add('selection1', 2)
+
+        self.assertTrue(len(expiring_selection), 2)
+        expiring_selection.flush(1)
+        self.assertTrue(len(expiring_selection), 1)
 
 
 class LimiterParserTestCase(unittest.TestCase):

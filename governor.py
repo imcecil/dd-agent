@@ -1,8 +1,7 @@
 import copy
-import heapq
 import inspect
 
-from collections import defaultdict
+from collections import defaultdict, deque
 
 
 class LimiterConfigError(Exception):
@@ -18,7 +17,10 @@ class Governor(object):
     # Defines what's an 'active' context
     # i.e. number of iterations for which a context (not encountered anymore)
     # is being stored before being flushed.
-    _KEEP_CONTEXTS_ITERATIONS = 3
+    _CONTEXTS_TTL = 3
+
+    # Collector payload's metric format
+    _METRIC_FORMAT = ['name', 'timestamp', 'value', 'attributes']
 
     _iteration = 0
 
@@ -29,39 +31,67 @@ class Governor(object):
     def __init__(self, func=None, identifier=None):
         self._limiters = copy.deepcopy(self._LIMITERS)
 
-    def set(self, func):
+    def process(self, metrics):
         """
-        Set governor to run as a decorator
-        """
-        self._submit_metric = func
-        self._submit_metric_arg_names = inspect.getargspec(func)[0]
+        Asynchronous metric payload analysis
 
-    def get_status(self):
+        """
+        for m in metrics:
+            named_args = self._name_args(*m)
+            self.check(named_args)
+
+        statuses = self.get_status(flush=True)
+
+        # Report to Datadog when Governor limit is hit
+        if any(['trace']['blocked_metrics'] for s in statuses):
+            import pdb; pdb.set_trace()
+            pass
+
+        return statuses
+
+    def get_status(self, flush=False):
         """
         Returns limiter statuses and flush limiters
         """
         statuses = [l.get_status() for l in self._limiters]
 
         # Flush limiters
-        self._limiters = copy.deepcopy(self._LIMITERS)
+        if flush:
+            for l in self._limiters:
+                l.flush(self._iteration - self._CONTEXTS_TTL)
+            self._iteration += 1
 
         return statuses
 
-    def _name_args(self, arg_list, kwargs):
+    def _name_args(self, arg_list, kwargs, asynchronous=False):
         """
         Name `arg_list` items and merge with `kwargs`
         """
         named_args = kwargs.copy()
         for i, arg_value in enumerate(arg_list):
-            arg_name = self._submit_metric_arg_names[i + 1]
+            if asynchronous:
+                arg_name = self._METRIC_FORMAT[i]
+            else:
+                arg_name = self._submit_metric_arg_names[i + 1]
             named_args[arg_name] = arg_value
         return named_args
 
     def _check(self, args):
         """
-        Check metric against all limiters.
+        Check metric against all limiters
         """
-        return all(r.check(args) for r in self._limiters)
+        return all(r.check(self._iteration, args) for r in self._limiters)
+
+    #####################################################
+    # Governor as a decorator  for `real-time` analysis #
+    #####################################################
+
+    def set(self, func):
+        """
+        Set governor to run as a decorator
+        """
+        self._submit_metric = func
+        self._submit_metric_arg_names = inspect.getargspec(func)[0]
 
     def __call__(self, *args, **kw):
         """
@@ -167,11 +197,12 @@ class Limiter(object):
 
         return lambda x: (tuple(get(x, k) for k in scope), tuple(get(x, k) for k in selection))
 
-    def check(self, *args, **kw):
+    def check(self, ts, *args, **kw):
         """
         Limiter main task.
         Check incoming metrics against the limit set, and returns a boolean
 
+        :param ts: metric timestamp (i.e. governor iteration)
         :param *args: metric list parameters
         :param **kw: metric named parameters
         """
@@ -186,8 +217,17 @@ class Limiter(object):
             if len(active_scope_selections) >= self._limit_cardinal:
                 self._blocked_metrics += 1
                 return False
-            active_scope_selections.add(selection_value, 1)
+            active_scope_selections.add(selection_value, ts)
             return True
+
+    def flush(self, max_timestamp):
+        """
+        Flush every scope's active selections
+        :param max_timestamp: cut off timestamp
+        """
+        for _, active_selections in self._active_selections_by_scope.iteritems():
+            active_selections.flush(max_timestamp)
+        self._blocked_metrics = 0
 
     def get_status(self):
         """
@@ -231,8 +271,8 @@ class ExpiringSelection(object):
     Store active selections
     """
     def __init__(self):
-        self._timestamp_by_selection = {}   # Known selection
-        self._selections_heap = []          # Iterate over selection in order of timestamps
+        self._timestamp_by_selection = {}   # Active selections
+        self._selection_queue = deque()     # Selection timestamps window
 
     def __len__(self):
         """
@@ -248,13 +288,13 @@ class ExpiringSelection(object):
         Add selection
         """
         self._timestamp_by_selection[selection] = timestamp
-        heapq.heappush(self._selections_heap, (timestamp, selection))
+        self._selection_queue.append((timestamp, selection))
 
     def flush(self, max_timestamp):
         """
         Removes expired selections
         """
-        while self._selections_heap and self._selections_heap[0][0] <= max_timestamp:
-            expiry, key = heapq.heappop(self._selections_heap)
+        while self._selection_queue and self._selection_queue[0][0] <= max_timestamp:
+            expiry, key = self._selection_queue.popleft()
             if self._timestamp_by_selection.get(key) == expiry:
                 del self._timestamp_by_selection[key]
