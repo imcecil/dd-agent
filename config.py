@@ -281,8 +281,13 @@ def get_governor_config():
             {
                 'scope': 'check',
                 'selection': 'name',
-                'limit': 20,
+                'limit': 2,
+            }, {
+                'scope': 'agent',
+                'selection': 'name',
+                'limit': 2,
             }
+
         ]
     }
 

@@ -20,7 +20,7 @@ from checks.agent_metrics import CollectorMetrics
 from checks.ganglia import Ganglia
 from checks.datadog import Dogstreams, DdForwarder
 from checks.check_status import CheckStatus, CollectorStatus, EmitterStatus, STATUS_OK, STATUS_ERROR
-from governor import Governor
+from governor import AgentGovernor, Governor
 from resources.processes import Processes as ResProcesses
 
 
@@ -59,6 +59,10 @@ class Collector(object):
             'agent_checks': {
                 'start': time.time(),
                 'interval': int(agentConfig.get('agent_checks_interval', 10 * 60))
+            },
+            'governor_check': {
+                'start': time.time(),
+                'interval': int(agentConfig.get('governor_check_interval', 2 * 60))
             }
         }
         socket.setdefaulttimeout(15)
@@ -114,11 +118,11 @@ class Collector(object):
             ResProcesses(log, self.agentConfig)
         ]
 
-        # Set Governor and instantiate one
+        # Init Governor and instantiate an AgentGovernor
         governor_config = get_governor_config()
         Governor.init(governor_config, self.agentConfig, self.hostname)
 
-        self.governor = Governor()
+        self.governor = AgentGovernor()
         self.governor_status = []
 
     def stop(self):
@@ -342,10 +346,8 @@ class Collector(object):
             hostname=self.hostname))
 
         # Governor: process the metric payload
-        if False:
+        if self._should_send_additional_data('governor_check'):
             self.governor_status = self.governor.process(metrics, report=False)
-
-        # import pdb; pdb.set_trace()
 
         # Store the metrics and events in the payload.
         payload['metrics'] = metrics
@@ -381,12 +383,13 @@ class Collector(object):
         collect_duration = timer.step()
 
         if self.os != 'windows':
-            payload['metrics'].extend(self._agent_metrics.check(payload, self.agentConfig,
+            payload['metrics'].extend(self._agent_metrics.check(
+                payload, self.agentConfig,
                 collect_duration, self.emit_duration, time.clock() - cpu_clock))
         else:
-            payload['metrics'].extend(self._agent_metrics.check(payload, self.agentConfig,
+            payload['metrics'].extend(self._agent_metrics.check(
+                payload, self.agentConfig,
                 collect_duration, self.emit_duration))
-
 
         emitter_statuses = self._emit(payload)
         self.emit_duration = timer.step()
@@ -556,5 +559,3 @@ class Collector(object):
             return True
 
         return False
-
-

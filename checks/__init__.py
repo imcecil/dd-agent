@@ -17,7 +17,7 @@ from collections import defaultdict
 from util import LaconicFilter, get_os, get_hostname, get_next_id, yLoader
 from config import get_confd_path
 from checks import check_status
-from governor import Governor
+from governor import CheckGovernor
 
 # 3rd party
 import yaml
@@ -289,12 +289,6 @@ class AgentCheck(object):
         self.hostname = agentConfig.get('checksd_hostname') or get_hostname(agentConfig)
         self.log = logging.getLogger('%s.%s' % (__name__, name))
 
-        self.governor = None
-
-        # Governor 'real-time' analysis
-        if True:
-            self.governor = Governor()
-
         self.aggregator = MetricsAggregator(
             self.hostname,
             formatter=agent_formatter,
@@ -309,6 +303,11 @@ class AgentCheck(object):
         self.warnings = []
         self.library_versions = None
         self.last_collection_time = defaultdict(int)
+
+        # Instantiate a CheckGovernor when required
+        self.governor = None
+        if CheckGovernor.get_check_limiters():
+            self.governor = CheckGovernor()
 
     def instance_count(self):
         """ Return the number of instances that are configured for this check. """
@@ -481,7 +480,7 @@ class AgentCheck(object):
         """
         metrics = self.aggregator.flush()
         if self.governor:
-            self.governor.process(metrics)
+            self.governor.process(metrics, flush=False)
         return metrics
 
     def get_events(self):
@@ -542,7 +541,7 @@ class AgentCheck(object):
 
     def get_governor_status(self):
         """
-        Return governor status
+        Return governor status and flush
         """
         status = self.governor.get_status(flush=True) if self.governor else []
         return status

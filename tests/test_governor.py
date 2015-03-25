@@ -15,9 +15,9 @@ from aggregator import MetricsAggregator
 
 class HybridGovernor(Governor):
     """
-    HybridGovernor
+    HybridGovernor for tests purpose
     """
-    def __init__(self, arg):
+    def __init__(self):
         self._limiters = copy.deepcopy(self._CHECK_LIMITERS + self._AGENT_LIMITERS)
 
 
@@ -137,7 +137,7 @@ class GovernorTestCase(unittest.TestCase):
         Hitting the governor limit should trigger a post warning
         """
         Governor.init(self.LIMIT_METRIC_NB)
-        governor = Governor()
+        governor = HybridGovernor()
 
         governor.process(self.METRIC_PAYLOAD, report=True)
 
@@ -153,7 +153,7 @@ class GovernorTestCase(unittest.TestCase):
         """
         Governor.init(self.LIMIT_METRIC_NB)
 
-        self.assertTrue(len(Governor._limiters()) == 1)
+        self.assertTrue(len(Governor.get_all_limiters()) == 1)
 
         m1 = MockMetricAggregator()
         m2 = MockMetricAggregator()

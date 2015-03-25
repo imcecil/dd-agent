@@ -5,6 +5,9 @@ import requests
 
 from collections import defaultdict, deque
 
+from config import _is_affirmative
+
+
 log = logging.getLogger('governor')
 
 
@@ -44,12 +47,27 @@ class Governor(object):
         """
         Set Governor agent-specific variables
         """
+        if not _is_affirmative(agent_config.get('use_governor', True)):
+            return
+
         cls._CHECK_LIMITERS, cls._AGENT_LIMITERS = LimiterParser.parse_limiters(governor_config)
         cls._HOSTNAME = hostname
         cls._DD_URL = agent_config.get('dd_url')
         cls._API_KEYS = agent_config.get('api_key')
 
-    def process(self, metrics, flush=False, report=False):
+    @classmethod
+    def get_agent_limiters(cls):
+        return cls._AGENT_LIMITERS
+
+    @classmethod
+    def get_check_limiters(cls):
+        return cls._CHECK_LIMITERS
+
+    @classmethod
+    def get_all_limiters(cls):
+        return cls.get_agent_limiters() + cls.get_check_limiters()
+
+    def process(self, metrics, flush=True, report=False):
         """
         Asynchronous metric payload analysis
         """
@@ -203,7 +221,7 @@ class Limiter(object):
     """
     A generic limiter
     """
-    _ATOMS = frozenset(['name', 'check', 'tags'])
+    _ATOMS = frozenset(['name', 'agent', 'check', 'tags'])
 
     def __init__(self, scope, selection, limit=None):
         # Definition

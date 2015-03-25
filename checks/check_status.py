@@ -341,6 +341,29 @@ class CollectorStatus(AgentStatus):
     def has_error(self):
         return self.status != STATUS_OK
 
+    @staticmethod
+    def draw_limiter(limiter):
+        limiter_lines = []
+        limiter_def = limiter['definition']
+        limiter_trace = limiter['trace']
+
+        # Limiter definition & status
+        status = style("OK", 'green') if not limiter_trace['overflow_metrics'] \
+            else style("OVERFLOW", 'red')
+        limiter_lines.append(
+            "  " * 4 + "- [" + status + "] Limit " +
+            str(limiter_def['selection']) + " by " + str(limiter_def["scope"]))
+
+        # Limiter trace
+        if limiter_trace['overflow_metrics']:
+            limiter_lines.append(
+                "  " * 6 + str(limiter_trace['overflow_metrics']) +
+                " metrics overflow.")
+
+        limiter_lines.append("")
+
+        return limiter_lines
+
     def body_lines(self):
         # Metadata whitelist
         metadata_whitelist = [
@@ -475,48 +498,52 @@ class CollectorStatus(AgentStatus):
         # Governor Status
         governor_enabled = _is_affirmative(get_config().get('use_governor', True))
 
-        if governor_enabled:
+        checks_governor = self.check_statuses and self.check_statuses[0].governor_status
+        agent_governor = self.governor_status
+
+        display_governor = governor_enabled and (checks_governor or agent_governor)
+
+        if display_governor:
             lines += [
                 "Governor",
                 "========",
                 ""
             ]
-            if not self.check_statuses:
-                lines.append("  No checks have run yet.")
-            else:
+
+            #  Checks Governor
+            if checks_governor:
+                lines += [
+                    "  Checks",
+                    "  ------",
+                    ""
+                ]
+
                 for cs in self.check_statuses:
                     check_lines = [
-                        '  ' + cs.name,
-                        '  ' + '-' * len(cs.name)
+                        '    ' + cs.name,
+                        '    ' + '-' * len(cs.name)
                     ]
 
                     for limiter in cs.governor_status:
-                        limiter_lines = []
-                        limiter_def = limiter['definition']
-                        limiter_trace = limiter['trace']
-
-                        # Limiter definition & status
-                        status = style("OK", 'green') if not limiter_trace['overflow_metrics'] \
-                            else style("OVERFLOW", 'red')
-                        limiter_lines.append(
-                            "  " * 2 + "- [" + status + "] Limit " +
-                            str(limiter_def['selection']) + " by " + str(limiter_def["scope"]))
-
-                        # Limiter trace
-                        if limiter_trace['overflow_metrics']:
-                            limiter_lines.append(
-                                "  " * 4 + str(limiter_trace['overflow_metrics']) +
-                                " metrics blocked.")
-
-                        limiter_lines.append("")
-
+                        limiter_lines = self.draw_limiter(limiter)
                         check_lines.extend(limiter_lines)
 
                     lines += check_lines
 
+            # Agent Governor
+            if agent_governor:
+                lines += [
+                    "  Collector",
+                    "  ---------",
+                    ""
+                ]
+
+                for limiter in self.governor_status:
+                    limiter_lines = self.draw_limiter(limiter)
+                    lines += limiter_lines
+
         # Emitter status
         lines += [
-            "",
             "Emitters",
             "========",
             ""

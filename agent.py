@@ -283,10 +283,9 @@ def main():
             print getattr(checks.collector, check_name)(log).check(agentConfig)
         except Exception:
 
-            # Instantiate a governor
+            # Init Governor
             governor_config = get_governor_config()
             Governor.init(governor_config)
-            governor = Governor()
 
             # If not an old-style check, try checks.d
             checks = load_check_directory(agentConfig, hostname)
